@@ -1,7 +1,5 @@
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
-import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
 import scala.math._
 import scala.io.Source
@@ -25,6 +23,7 @@ object Lasso {
   class LassoProb(
     Ax_t:SparseVector[Double],
     x_t:SparseVector[Double]){
+    def this() = this(null, null)
     var Ax:SparseVector[Double] = Ax_t
     var x:SparseVector[Double] = x_t
   }
@@ -89,7 +88,7 @@ object Lasso {
   }
 
   def getTermThreshold(regPathStep:Int, regPathLen:Int, threshold:Double) = {
-    if(k==0)
+    if(regPathStep==0)
       threshold
     else
       threshold + regPathStep * (threshold * 50)/regPathLen
@@ -111,7 +110,7 @@ object Lasso {
     val delta = newx - oldx
     (colId, delta, lassoCol.A*delta)
   }
-  def computeObject(Ax:SparseVector[Double], x:SparseVector[Double], y:SparseVector[Double])
+  def computeObject(Ax:SparseVector[Double], x:SparseVector[Double], y:SparseVector[Double], lambda:Double)
     :(Double,Double,Double,Double)={
     val l2err = pow((Ax-y).norm(2),2)
     val l1x = x.norm(1)
@@ -138,14 +137,14 @@ object Lasso {
         | Implementation of Lasso Shotgun-algorithm from paper:
         | Parallel Coordinate Descent for L1-Regularized Loss Minimization.""".stripMargin)
       opt[String]("inputX").text("input matrix X file name").required()
-        .action((x, c) => c.copy(inputX = x))
+        .action((x, c) => c.copy(inputA = x))
       opt[String]("inputY").text("input vector y file name").required()
         .action((x, c) =>c.copy(inputY = x))
       opt[Int]("numIter").text(s"iteration number, default: ${defaultParams.numIter}")
         .action((x, c) =>c.copy(numIter = x))
       opt[Double]("lambda").text(s"lambda, default: ${defaultParams.lambda}")
         .action((x, c) =>c.copy(lambda = x))
-      opt[Double]("regPathLen").text(s"regularization path length, default: ${defaultParams.regPathLen}")
+      opt[Int]("regPathLen").text(s"regularization path length, default: ${defaultParams.regPathLen}")
         .action((x, c) =>c.copy(regPathLen = x))
       opt[Double]("threshold").text(s"threshold, default: ${defaultParams.threshold}")
         .action((x, c) =>c.copy(threshold = x))
@@ -190,36 +189,36 @@ object Lasso {
     // Initialize convergence step parameters
     var counter = 0
     val lambdaMin = params.lambda
-    val lambdaMax = LassoRDD.map(p => p.Aty).reduce(math.max)
-    val regPathLen = params.regPathLen
-    val alpha = pow(lambdaMax/lambdaMin, 1.0/(1.0*regPathLength))
+    val lambdaMax = LassoRDD.map(p => math.abs(p.Aty)).reduce(math.max)
+    val regPathLen = if (params.regPathLen<=0) 1+params.np/2000 else params.regPathLen
+    val alpha = pow(lambdaMax/lambdaMin, 1.0/(1.0*regPathLen))
     var regPathStep = regPathLen
 
     println("Performing shot")
-    for(i <- 1 to iter) {
+    for(i <- 1 to params.numIter) {
       val lambda = lambdaMin * pow(alpha, regPathStep)
       /**
        * In Spark implemetation, we can hardly change the x and Ax while in parallel processing. So we back to
        * original shotgun model, that is applying SCD in serval columns at a time, and then update x and Ax.
        */
-      val maxChanges = for {
-        j <- 1 to np / slices
+      val maxChanges = for(j <- 1 to params.np/params.numSlice) yield {
         val (updateIndices, updateDeltas, updateAx) = LassoRDD
-          .takeSample(false, slices).map(p => shoot(p, lambda)).array.unzip3
-        val deltaSpV = new SparseVector[Double](updateIndices, updateDeltas, params.nm)
+          .takeSample(false, params.numSlice).map(p => shoot(p, lambda, lassoProb)).array.unzip3
+        val deltaSpV = new SparseVector[Double](updateIndices.toArray, updateDeltas.toArray, params.np)
         lassoProb.x += deltaSpV
         lassoProb.Ax +=(updateAx.reduce(_+_))
-        val maxDelta = updateDeltas.map(math.abs).reduce(math.max)
+        updateDeltas.map(math.abs).reduce(math.max(_,_))    //max_delta
         // need test wether to broadcast
-      } yield maxDelta
+      }
       //adjust convergence step
-      val converged = (maxChanges.reduce(math.max) <= getTermThreshold(regPathStep, regPathLen, params.threshold))
-      if(converged || counter>min(100, (100-regPathStep)*2)){
+      counter+=1
+      val converged = (maxChanges.reduce(math.max(_,_)) <= getTermThreshold(regPathStep, regPathLen, params.threshold))
+      if(converged || counter>math.min(100, (100-regPathStep)*2)){
         counter = 0
         regPathStep -= 1
       }
       //output objective
-      val (obj, l2err, l1x, l0x) = computeObject(lassoProb.Ax, lassoProb.x, yLoad)
+      val (obj, l2err, l1x, l0x) = computeObject(lassoProb.Ax, lassoProb.x, yLoad, lambda)
       println(s"Objective: ${obj}  L1: ${l1x}  L2err: ${l2err}  l0: ${l0x}")
       if(regPathStep<0) break
     }
