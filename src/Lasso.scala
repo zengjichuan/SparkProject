@@ -54,10 +54,10 @@ object Lasso {
   /**
    * Parse data file y
    * @param file input file name
-   * @param np number of features
+   * @param nm number of samples
    * @return
    */
-  def loadY(file:String, np:Int):SparseVector[Double] = {
+  def loadY(file:String, nm:Int):SparseVector[Double] = {
     //    for (line <- Source.fromFile(file).getLines.toArray) yield line.split("\\s+")(2).toDouble
     val (indices, values) = Source.fromFile(file).getLines().toArray.map(_.trim)
       .filter(line => !(line.isEmpty || line.startsWith("#")))
@@ -67,7 +67,7 @@ object Lasso {
       val value = items(2).toDouble
       (index, value)
     }.unzip
-    new SparseVector[Double](indices.toArray, values.toArray, np)
+    new SparseVector[Double](indices.toArray, values.toArray, nm)
   }
 
   /**
@@ -138,16 +138,30 @@ object Lasso {
     numSlice:Int = 2,
     outputX:String="lasso_spark")
 
-  /**
-   * Write file library function
-   * @param f
-   * @param op
-   * @return
-   */
+  //============================= FILE WRITER ============================
   def printToFile(f: java.io.File)(op: java.io.PrintWriter => Unit) {
     val p = new java.io.PrintWriter(f)
     try { op(p) } finally { p.close() }
   }
+  /**
+   * Used for reading/writing to database, files, etc.
+   * Code From the book "Beginning Scala"
+   * http://www.amazon.com/Beginning-Scala-David-Pollak/dp/1430219890
+   */
+  def using[A <: {def close(): Unit}, B](param: A)(f: A => B): B =
+    try { f(param) } finally { param.close() }
+
+  def writeToFile(fileName:String, data:String) =
+    using (new java.io.FileWriter(fileName)) {
+      fileWriter => fileWriter.write(data)
+    }
+  def appendToFile(fileName:String, textData:String) =
+    using (new java.io.FileWriter(fileName, true)){
+      fileWriter => using (new java.io.PrintWriter(fileWriter)) {
+        printWriter => printWriter.println(textData)
+      }
+    }
+  //============================= FILE WRITER ============================
 
   def main(args: Array[String]) {
     val defaultParams = Params()
@@ -197,9 +211,8 @@ object Lasso {
     val ALoad = loadA(params.inputA, params.nm)
     println("done")
 
-//    println(s"X contains ${X.count()} non-zero columns")
     print("Loading vector y from ... ")
-    val yLoad = loadY(params.inputY, params.np)
+    val yLoad = loadY(params.inputY, params.nm)
     println("done")
     println("Initializing features...")
     val LassoRDD = initAndGetLassoRDD(spark, ALoad, yLoad, params.numSlice).cache()
@@ -207,7 +220,7 @@ object Lasso {
     val lassoProb = new LassoProb()
     lassoProb.Ax = SparseVector.zeros[Double](params.nm)
     lassoProb.x = SparseVector.zeros[Double](params.np)
-    println(lassoProb.x.size)
+
     // Initialize convergence step parameters
     var counter = 0
     val lambdaMin = params.lambda
@@ -216,10 +229,12 @@ object Lasso {
     val alpha = pow(lambdaMax/lambdaMin, 1.0/(1.0*regPathLen))
     var regPathStep = regPathLen
 
-    // Output File config
+    // Record file
+    val recFile = params.outputX+"_"+"local"
+    var change = SparseVector.zeros[Double](params.np)
+    writeToFile(recFile, "Itr\tObj\t\t\tl1x\t\tl2r\n")
 
-    println("Performing shot")
-    for(i <- 1 to params.numIter) {
+    breakable{for(i <- 1 to params.numIter) {
       val lambda = lambdaMin * pow(alpha, regPathStep)
       /**
        * In Spark implemetation, we can hardly change the x and Ax while in parallel processing. So we back to
@@ -229,7 +244,9 @@ object Lasso {
         val (updateIndices, updateDeltas, updateAx) = LassoRDD
           .takeSample(false, params.numSlice).map(p => shoot(p, lambda, lassoProb)).array.unzip3
         val deltaSpV = new SparseVector[Double](updateIndices.toArray, updateDeltas.toArray, params.np)
-        lassoProb.x += deltaSpV     // "requirement failed: Can't have more elements in the array than length!"
+//        lassoProb.x += deltaSpV     // "requirement failed: Can't have more elements in the array than length!"
+        val bb = deltaSpV+lassoProb.x
+        lassoProb.x = bb
         lassoProb.Ax += (updateAx.reduce(_ + _))
         updateDeltas.map(math.abs).reduce(math.max(_, _)) //max_delta
         // need test wether to broadcast
@@ -244,12 +261,15 @@ object Lasso {
       //output objective
       val (obj, l2err, l1x, l0x) = computeObject(lassoProb.Ax, lassoProb.x, yLoad, lambda)
       println(s"Objective: ${obj}  L1: ${l1x}  L2err: ${l2err}  l0: ${l0x}")
+      appendToFile(recFile,
+        s"${i}\t${obj.formatted("%.2f")}\t\t${l1x.formatted("%.2f")}\t${l2err.formatted("%.2f")}")
       if (regPathStep < 0) {
         println("Step already < 0")
         break
       }
-    }
+    }}
     // Output to file
+    println("Writing to file ...")
     printToFile(new java.io.File(params.outputX)){
       p => lassoProb.x.toArray.foreach(p.println)
     }
