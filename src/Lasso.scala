@@ -101,6 +101,14 @@ object Lasso {
     else
       0
   }
+
+  /**
+   * Stochastic Corrdinate Descent algorithm
+   * @param lassoCol
+   * @param lambda
+   * @param lassoProb
+   * @return
+   */
   def shoot(lassoCol:LassoSCD, lambda:Double, lassoProb:LassoProb):(Int,Double,SparseVector[Double]) = {
     val colId = lassoCol.colId
     val oldx = lassoProb.x(colId)
@@ -127,7 +135,19 @@ object Lasso {
     regPathLen:Int = 0,
     nm:Int = 0,
     np:Int = 0,
-    numSlice:Int = 2)
+    numSlice:Int = 2,
+    outputX:String="lasso_spark")
+
+  /**
+   * Write file library function
+   * @param f
+   * @param op
+   * @return
+   */
+  def printToFile(f: java.io.File)(op: java.io.PrintWriter => Unit) {
+    val p = new java.io.PrintWriter(f)
+    try { op(p) } finally { p.close() }
+  }
 
   def main(args: Array[String]) {
     val defaultParams = Params()
@@ -136,7 +156,7 @@ object Lasso {
         """
         | Implementation of Lasso Shotgun-algorithm from paper:
         | Parallel Coordinate Descent for L1-Regularized Loss Minimization.""".stripMargin)
-      opt[String]("inputX").text("input matrix X file name").required()
+      opt[String]("inputA").text("input matrix A file name").required()
         .action((x, c) => c.copy(inputA = x))
       opt[String]("inputY").text("input vector y file name").required()
         .action((x, c) =>c.copy(inputY = x))
@@ -154,6 +174,8 @@ object Lasso {
         .action((x, c) =>c.copy(nm = x))
       opt[Int]("numSlice").text(s"number of slice, defalut: ${defaultParams.numSlice}")
         .action((x, c) =>c.copy(numSlice = x))
+      opt[String]("outputX").text(s"output vector X file name, defalut: ${defaultParams.outputX}")
+        .action((x, c) => c.copy(outputX = x))
     }
     parser.parse(args, defaultParams).map{params =>
       lassoRun(params)
@@ -185,7 +207,7 @@ object Lasso {
     val lassoProb = new LassoProb()
     lassoProb.Ax = SparseVector.zeros[Double](params.nm)
     lassoProb.x = SparseVector.zeros[Double](params.np)
-
+    println(lassoProb.x.size)
     // Initialize convergence step parameters
     var counter = 0
     val lambdaMin = params.lambda
@@ -194,6 +216,8 @@ object Lasso {
     val alpha = pow(lambdaMax/lambdaMin, 1.0/(1.0*regPathLen))
     var regPathStep = regPathLen
 
+    // Output File config
+
     println("Performing shot")
     for(i <- 1 to params.numIter) {
       val lambda = lambdaMin * pow(alpha, regPathStep)
@@ -201,26 +225,33 @@ object Lasso {
        * In Spark implemetation, we can hardly change the x and Ax while in parallel processing. So we back to
        * original shotgun model, that is applying SCD in serval columns at a time, and then update x and Ax.
        */
-      val maxChanges = for(j <- 1 to params.np/params.numSlice) yield {
+      val maxChanges = for (j <- 1 to params.np / params.numSlice) yield {
         val (updateIndices, updateDeltas, updateAx) = LassoRDD
           .takeSample(false, params.numSlice).map(p => shoot(p, lambda, lassoProb)).array.unzip3
         val deltaSpV = new SparseVector[Double](updateIndices.toArray, updateDeltas.toArray, params.np)
-        lassoProb.x += deltaSpV
-        lassoProb.Ax +=(updateAx.reduce(_+_))
-        updateDeltas.map(math.abs).reduce(math.max(_,_))    //max_delta
+        lassoProb.x += deltaSpV     // "requirement failed: Can't have more elements in the array than length!"
+        lassoProb.Ax += (updateAx.reduce(_ + _))
+        updateDeltas.map(math.abs).reduce(math.max(_, _)) //max_delta
         // need test wether to broadcast
       }
       //adjust convergence step
-      counter+=1
-      val converged = (maxChanges.reduce(math.max(_,_)) <= getTermThreshold(regPathStep, regPathLen, params.threshold))
-      if(converged || counter>math.min(100, (100-regPathStep)*2)){
+      counter += 1
+      val converged = (maxChanges.reduce(math.max(_, _)) <= getTermThreshold(regPathStep, regPathLen, params.threshold))
+      if (converged || counter > math.min(100, (100 - regPathStep) * 2)) {
         counter = 0
         regPathStep -= 1
       }
       //output objective
       val (obj, l2err, l1x, l0x) = computeObject(lassoProb.Ax, lassoProb.x, yLoad, lambda)
       println(s"Objective: ${obj}  L1: ${l1x}  L2err: ${l2err}  l0: ${l0x}")
-      if(regPathStep<0) break
+      if (regPathStep < 0) {
+        println("Step already < 0")
+        break
+      }
+    }
+    // Output to file
+    printToFile(new java.io.File(params.outputX)){
+      p => lassoProb.x.toArray.foreach(p.println)
     }
 //    println (X.map(p => p.label).reduce(_+_))//.foreach(x:LabeledPoint => ).take(10).foreach(println)
 //    println(X.takeSample(false, 5).foreach(p=> println(p.features*p.features)))

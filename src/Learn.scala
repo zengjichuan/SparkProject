@@ -5,6 +5,11 @@ import breeze.linalg.{Vector, DenseVector, SparseVector}
 import breeze.stats.distributions._
 
 object Learn {
+
+  def printToFile(f: java.io.File)(op: java.io.PrintWriter => Unit) {
+    val p = new java.io.PrintWriter(f)
+    try { op(p) } finally { p.close() }
+  }
   def main(args: Array[String]){
     var change:Int = 0
     val ha = for {
@@ -28,11 +33,11 @@ object Learn {
     val vec1 = DenseVector[Double](1,2,3,4)
     val vec2 = DenseVector.rand(4).t
     var svec1 = new SparseVector(Array(0,2,3), Array(1,3,3),4)
-    val svec2 = new SparseVector(Array(1,2), Array(1,3),4)
+    val svec2 = new SparseVector(Array(3,2), Array(1,3),4)
     val svec3 = SparseVector.zeros[Int](4)
     println("svec1 sum: "+svec1.sum)
     println("svec1 size: "+svec1.length)
-
+    svec2.toArray.foreach(println)
     println("svec1 + svec2: "+(svec1+svec2))
     println("svec2 norm: "+svec2.used)
 //    svec2.mapActiveValues(println)
@@ -52,6 +57,10 @@ object Learn {
     f2.foreach(println)
     val bb = 5+(f3.reduce(_+_))
     println(bb)
+    val data = Array("Five","strings","in","a","file!")
+    printToFile(new java.io.File("example.txt")) { p =>
+      data.foreach(p.println)
+    }
   }
   def sum(a:Int, b:Int)= a+b
 }
