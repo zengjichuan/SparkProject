@@ -29,13 +29,14 @@ object Lasso {
     var x:SparseVector[Double] = x_t
   }
   /**
-   * parse data file A
+   * parse data file A from hdfs using spark textFile
+   * @param sc spark context
    * @param file input file name
    * @param nm num of samples
    * @return  array of DataX
    */
-  def loadA(file:String, nm:Int): Array[DataA] = {
-    val parsed = Source.fromFile(file).getLines().toArray
+  def loadA(sc:SparkContext, file:String, nm:Int): Array[DataA] = {
+    val parsed = sc.textFile(file)
       .map(_.trim)
       .filter(line => !(line.isEmpty || line.startsWith("#")))
       .map {line =>
@@ -49,18 +50,19 @@ object Lasso {
         }.unzip
         (colId, indices.toArray, values.toArray)
       }
-    parsed.map{case (colId, indices, values) => DataA(colId, new SparseVector(indices, values, nm))}
+    parsed.map{case (colId, indices, values) => DataA(colId, new SparseVector(indices, values, nm))}.collect()
   }
 
   /**
-   * Parse data file y
+   * Parse data file y from hdfs using spark textFile
+   * @param sc spark context
    * @param file input file name
    * @param nm number of samples
    * @return
    */
-  def loadY(file:String, nm:Int):SparseVector[Double] = {
+  def loadY(sc:SparkContext, file:String, nm:Int):SparseVector[Double] = {
     //    for (line <- Source.fromFile(file).getLines.toArray) yield line.split("\\s+")(2).toDouble
-    val (indices, values) = Source.fromFile(file).getLines().toArray.map(_.trim)
+    val (indices, values) = sc.textFile(file).collect().map(_.trim)
       .filter(line => !(line.isEmpty || line.startsWith("#")))
       .map { line =>
       val items = line.split("\\s+")
@@ -123,7 +125,7 @@ object Lasso {
     :(Double,Double,Double,Double)={
     val l2err = pow((Ax-y).norm(2),2)
     val l1x = x.norm(1)
-    val l0x = x.used
+    val l0x = x.used      //useless
     val obj = lambda * l1x + l2err
     (obj, l2err, l1x, l0x)
   }
@@ -200,7 +202,8 @@ object Lasso {
   }
 
   def lassoRun(params:Params){
-    val spark = new SparkContext("local", s"Lasso with $params")
+    val conf = new SparkConf(s"Lasso with $params")
+    val spark = new SparkContext(conf)
     /**
       * NOTICE: We first use MLUtils.loadLibSVMFile to load matrix X in the form of X = [x_1, x_2,..., x_p]T.
       *         LabelPoint in here means [Column Id, Column feature], And we store y separately.
@@ -209,11 +212,11 @@ object Lasso {
       */
     print("Loading matrix A from ... ")
 //    val X = MLUtils.loadLibSVMFile(spark, "data/covtype.test").cache()
-    val ALoad = loadA(params.inputA, params.nm)
+    val ALoad = loadA(spark, params.inputA, params.nm)
     println("done")
 
     print("Loading vector y from ... ")
-    val yLoad = loadY(params.inputY, params.nm)
+    val yLoad = loadY(spark, params.inputY, params.nm)
     println("done")
     println("Initializing features...")
     val LassoRDD = initAndGetLassoRDD(spark, ALoad, yLoad, params.numSlice).cache()
