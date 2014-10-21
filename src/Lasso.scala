@@ -1,4 +1,5 @@
-import org.apache.spark.SparkContext
+package priv.zengjichuan.plasso
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import scala.math._
@@ -199,7 +200,8 @@ object Lasso {
   }
 
   def lassoRun(params:Params){
-    val spark = new SparkContext("local", s"Lasso with $params")
+    val conf = new SparkConf().setAppName(s"Lasso with $params")
+    val spark = new SparkContext(conf)
     /**
       * NOTICE: We first use MLUtils.loadLibSVMFile to load matrix X in the form of X = [x_1, x_2,..., x_p]T.
       *         LabelPoint in here means [Column Id, Column feature], And we store y separately.
@@ -245,8 +247,8 @@ object Lasso {
           .takeSample(false, params.numSlice).map(p => shoot(p, lambda, lassoProb)).array.unzip3
         val deltaSpV = new SparseVector[Double](updateIndices.toArray, updateDeltas.toArray, params.np)
 //        lassoProb.x += deltaSpV     // "requirement failed: Can't have more elements in the array than length!"
-        val bb = deltaSpV+lassoProb.x
-        lassoProb.x = bb
+        val tmp = deltaSpV+lassoProb.x
+        lassoProb.x = tmp
         lassoProb.Ax += (updateAx.reduce(_ + _))
         updateDeltas.map(math.abs).reduce(math.max(_, _)) //max_delta
         // need test wether to broadcast
@@ -273,9 +275,6 @@ object Lasso {
     printToFile(new java.io.File(params.outputX)){
       p => lassoProb.x.toArray.foreach(p.println)
     }
-//    println (X.map(p => p.label).reduce(_+_))//.foreach(x:LabeledPoint => ).take(10).foreach(println)
-//    println(X.takeSample(false, 5).foreach(p=> println(p.features*p.features)))
-
     spark.stop()
   }
 }
