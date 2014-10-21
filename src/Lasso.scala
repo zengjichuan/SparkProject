@@ -202,7 +202,7 @@ object Lasso {
   }
 
   def lassoRun(params:Params){
-    val conf = new SparkConf(s"Lasso with $params")
+    val conf = new SparkConf().setAppName(s"Lasso with $params")
     val spark = new SparkContext(conf)
     /**
       * NOTICE: We first use MLUtils.loadLibSVMFile to load matrix X in the form of X = [x_1, x_2,..., x_p]T.
@@ -234,7 +234,7 @@ object Lasso {
     var regPathStep = regPathLen
 
     // Record file
-    val recFile = params.outputX+"_"+"local"
+    val recFile = params.outputX+"_"+"cluster"
     var change = SparseVector.zeros[Double](params.np)
     writeToFile(recFile, "Itr\tObj\t\t\tl1x\t\tl2r\n")
 
@@ -273,10 +273,11 @@ object Lasso {
       }
     }}
     // Output to file
-    println("Writing to file ...")
+    print("Writing to file ... ")
     printToFile(new java.io.File(params.outputX)){
       p => lassoProb.x.toArray.foreach(p.println)
     }
+    println("done")
     spark.stop()
   }
 }
