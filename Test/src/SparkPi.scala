@@ -1,8 +1,11 @@
 /**
  * Created by ZengJichuan on 2014/10/8.
  */
+
+import org.apache.spark.SparkContext
+
 import scala.math.random
-import org.apache.spark._
+
 object SparkPi {
   def main(args: Array[String]){
     val spark = new SparkContext(args(0), "Spark Pi")

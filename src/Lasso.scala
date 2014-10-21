@@ -200,8 +200,7 @@ object Lasso {
   }
 
   def lassoRun(params:Params){
-    val conf = new SparkConf().setAppName(s"Lasso with $params")
-    val spark = new SparkContext(conf)
+    val spark = new SparkContext("local", s"Lasso with $params")
     /**
       * NOTICE: We first use MLUtils.loadLibSVMFile to load matrix X in the form of X = [x_1, x_2,..., x_p]T.
       *         LabelPoint in here means [Column Id, Column feature], And we store y separately.

@@ -1,10 +1,11 @@
 /**
  * Created by ZengJichuan on 2014/10/15.
  */
-import breeze.linalg.{Vector, DenseVector, SparseVector}
-import breeze.stats.distributions._
-import org.apache.commons.math3.linear.OpenMapRealVector
+
+import breeze.linalg.{SparseVector, DenseVector}
+
 import scala.util.control.Breaks._
+
 object Learn {
 
   /**
